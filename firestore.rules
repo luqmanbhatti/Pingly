@@ -1,0 +1,82 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+    function isVerified() {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.emailVerified == true;
+    }
+    // True if the *other* participant in this chat has blocked me.
+    function isBlockedInChat(chatId) {
+      let participants = get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+      let other = participants[0] == request.auth.uid ? participants[1] : participants[0];
+      return get(/databases/$(database)/documents/users/$(other)).data.get('blockedUsers', {}).get(request.auth.uid, false) == true;
+    }
+
+    match /users/{uid} {
+      allow read: if isSignedIn();
+      allow create: if isOwner(uid);
+      // A user can update their own doc freely (including their own
+      // blockedUsers map), EXCEPT they can't flip emailVerified to true
+      // themselves -- that can only happen when their own Firebase Auth ID
+      // token already carries a real, server-issued email_verified claim
+      // (can't be forged by the client).
+      allow update: if isOwner(uid) &&
+        (
+          request.resource.data.emailVerified == resource.data.emailVerified ||
+          (request.resource.data.emailVerified == true &&
+           request.auth.token.email_verified == true)
+        );
+      allow delete: if false;
+    }
+
+    match /usernames/{username} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    match /pins/{uid} {
+      allow read, write: if false;
+    }
+
+    match /chats/{chatId} {
+      // resource == null covers the "does this chat doc exist yet" read that
+      // startChat() does before creating a brand-new chat -- without this,
+      // reading a not-yet-created chat doc throws and gets denied.
+      allow read: if isSignedIn() &&
+        (resource == null || request.auth.uid in resource.data.participants);
+      allow create: if isSignedIn() && request.auth.uid in request.resource.data.participants;
+      allow update: if isSignedIn() && request.auth.uid in resource.data.participants;
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn() &&
+          (
+            !exists(/databases/$(database)/documents/chats/$(chatId)) ||
+            request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+          );
+        allow create: if isVerified() &&
+          request.auth.uid == request.resource.data.senderId &&
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants &&
+          !isBlockedInChat(chatId);
+        allow update: if isSignedIn() &&
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+        allow delete: if false;
+      }
+    }
+
+    // Persistent call history log (separate from the Realtime Database
+    // "calls" node, which is only used for live WebRTC signaling).
+    match /callLogs/{callId} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.participants;
+      allow create: if isSignedIn() && request.auth.uid in request.resource.data.participants;
+      allow update: if isSignedIn() && request.auth.uid in resource.data.participants;
+      allow delete: if false;
+    }
+  }
+}

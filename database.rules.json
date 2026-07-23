@@ -1,0 +1,22 @@
+{
+  "rules": {
+    "calls": {
+      "$callId": {
+        ".read": "auth != null && (data.child('callerId').val() === auth.uid || data.child('calleeId').val() === auth.uid || !data.exists())",
+        ".write": "auth != null && (!data.exists() || data.child('callerId').val() === auth.uid || data.child('calleeId').val() === auth.uid)"
+      }
+    },
+    "incomingCalls": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null"
+      }
+    },
+    "status": {
+      "$uid": {
+        ".read": "auth != null",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    }
+  }
+}
